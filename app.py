@@ -206,11 +206,8 @@ if query_text:
                 for idx, row in results_df.iterrows():
                     with st.expander(f"📄 {row['FILE_NAME']} (Chunk {int(row['CHUNK_ID'])}) - Match: {float(row['SIMILARITY'])*100:.1f}%"):
                         st.info(row['CHUNK_TEXT'])
-                        clean_filename = f"chunk_{int(row['CHUNK_ID'])}.txt"
-                        st.download_button(
-                            label="💾 Save chunk text",
-                            data=row['CHUNK_TEXT'],
-                                                    # Cleanly layout the download button block
+                        
+                        # Correctly indented download button logic block
                         clean_filename = f"chunk_{int(row['CHUNK_ID'])}.txt"
                         st.download_button(
                             label="💾 Save chunk text",
@@ -221,7 +218,5 @@ if query_text:
                         )
                         
         except Exception as e:
-            # This handles the main calculation try-block on a clean line
             st.error("🚨 System Execution Error")
             st.exception(e)
-    
