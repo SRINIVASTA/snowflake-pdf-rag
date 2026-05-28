@@ -46,7 +46,7 @@ if query_text:
             # Escape single quotes in the user input to prevent SQL syntax errors
             safe_query = query_text.replace("'", "''")
             
-            # FIXED: Explicitly casting both the query array and column array into VECTOR(FLOAT, 384)
+            # Updated to utilize our smart case-insensitive 384-dim local array function
             search_sql = f"""
                 WITH search_query AS (
                     SELECT CAST(local_python_embed('{safe_query}') AS VECTOR(FLOAT, 384)) AS q_vec
