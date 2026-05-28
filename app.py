@@ -1,97 +1,111 @@
 import streamlit as st
+import requests
 from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark import Session
 
 # App Layout Configuration
-st.set_page_config(page_title="Advanced PDF RAG Search", page_icon="📄", layout="centered")
+st.set_page_config(page_title="AI Conversational RAG Engine", page_icon="🤖", layout="centered")
 
-st.title("📄 Advanced Document Search Engine")
-st.caption("Powered by Snowflake, Streamlit & GitHub (Zero External APIs)")
+st.title("🤖 Dynamic AI Document RAG")
+st.caption("Powered by Snowflake, Streamlit & Hugging Face (Hybrid API & Offline Modes)")
 st.markdown("---")
 
-# DYNAMIC CONNECTION HANDLER
+# DYNAMIC CONNECTION HANDLER FOR SNOWFLAKE
 @st.cache_resource
 def get_snowflake_session():
     try:
-        # 1. Try connecting natively inside Snowflake
         return get_active_session()
     except Exception:
-        # 2. Fallback: Connect from GitHub/Streamlit Cloud using secrets
         if "snowflake" in st.secrets:
             return Session.builder.configs(st.secrets["snowflake"]).create()
         else:
-            st.error("🔒 Missing Snowflake configuration secrets in Streamlit Cloud Dashboard!")
+            st.error("🔒 Missing Snowflake configuration secrets!")
             st.stop()
 
-# Initialize session
-session = get_snowflake_session()
+# HUGGING FACE INFERENCE ENGINE
+def ask_free_llm(query, textbook_context, api_key):
+    api_url = "https://huggingface.co"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    
+    prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+You are a professor teaching data science. Answer the student question using ONLY the textbook facts provided. 
+If the text does not contain the answer, say "I cannot find that in the textbook." Keep it concise and accurate.
 
-# FORCE THE DATABASE AND SCHEMA CONTEXT EVERY TIME THE APP LOADS
+Textbook Context:
+{textbook_context}
+<|eot_id|><|start_header_id|>user<|end_header_id|>
+Question: {query}
+<|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
+
+    try:
+        response = requests.post(api_url, headers=headers, json={"inputs": prompt, "parameters": {"max_new_tokens": 250, "temperature": 0.2}})
+        output = response.json()
+        
+        if isinstance(output, list) and len(output) > 0 and "generated_text" in output:
+            raw_text = output["generated_text"]
+            if "<|start_header_id|>assistant<|end_header_id|>" in raw_text:
+                return raw_text.split("<|start_header_id|>assistant<|end_header_id|>")[-1].strip()
+            return raw_text
+        return "⚠️ *The free AI cluster is temporarily busy. Please re-submit your query in a few moments.*"
+    except Exception as e:
+        return f"⚠️ *API Connection Error: {str(e)}*"
+
+# Initialize Snowflake Session
+session = get_snowflake_session()
 try:
     session.sql("USE DATABASE RAG_DEMO_DB;").collect()
     session.sql("USE SCHEMA DATA;").collect()
-except Exception as context_error:
+except Exception:
     st.error("❌ Failed to set Snowflake Database Context!")
     st.stop()
 
-# SIDEBAR: Stats, Filters, and Advanced Relevance Controls
+# SIDEBAR: DYNAMIC API CREDENTIAL CONTROLS
 with st.sidebar:
-    st.header("📊 Database Statistics")
-    try:
-        stats_df = session.sql("""
-            SELECT 
-                COUNT(*) as total_chunks, 
-                COUNT(DISTINCT file_name) as total_files 
-            FROM pdf_document_chunks;
-        """).to_pandas()
-        
-        total_chunks = int(stats_df["TOTAL_CHUNKS"].iloc[0])
-        total_files = int(stats_df["TOTAL_FILES"].iloc[0])
-        
-        col_files, col_chunks = st.columns(2)
-        col_files.metric("Total Files", f"📁 {total_files}")
-        col_chunks.metric("Total Chunks", f"🧩 {total_chunks}")
-    except Exception:
-        st.warning("⚠️ Could not read real-time table statistics from Snowflake.")
+    st.header("🔑 Authentication Mode")
     
-    st.markdown("---")
-    st.header("🎛️ Search Adjustments")
+    # 1. Look for pre-configured secret token
+    secret_key = st.secrets.get("HUGGINGFACE_API_KEY", "")
     
-    # Relevance Threshold Slider to filter out junk matches
-    min_relevance = st.slider(
-        "Minimum Relevance Cutoff (%)", 
-        min_value=0, 
-        max_value=100, 
-        value=35,
-        help="Any document fragment scoring below this percentage will be automatically filtered out."
+    # 2. Provide a manual manual input field on-screen
+    manual_key = st.text_input(
+        "Enter Hugging Face Token manually:", 
+        type="password", 
+        placeholder="hf_...",
+        help="Paste a free Read token from huggingface.co/settings/tokens to enable Conversational summaries."
     )
     
+    # Determine which key to activate
+    active_api_key = manual_key if manual_key else secret_key
+    
+    if active_api_key:
+        st.success("🤖 **Conversational Mode Active** (AI summary enabled)")
+    else:
+        st.info("📄 **Pure Search Mode Active** (Displaying source chunks directly without API)")
+        
     st.markdown("---")
-    st.header("🔍 Document Filters")
+    st.header("📊 Database Status")
     try:
-        distinct_files_df = session.sql("SELECT DISTINCT file_name FROM pdf_document_chunks ORDER BY file_name;").to_pandas()
-        file_options = ["All Documents"] + distinct_files_df["FILE_NAME"].tolist()
+        stats_df = session.sql("SELECT COUNT(*) as total FROM pdf_document_chunks;").to_pandas()
+        st.success(f"🧩 Indexed Textbook Chunks: **{int(stats_df['TOTAL'].iloc[0])}**")
     except Exception:
-        file_options = ["All Documents"]
+        st.warning("Could not read real-time database rows.")
+        
+    st.markdown("---")
+    min_relevance = st.slider("Minimum Relevance Cutoff (%)", min_value=0, max_value=100, value=20)
 
-    selected_file = st.selectbox("Select document to search within:", options=file_options)
-    st.divider()
-
-# User Input Box
-query_text = st.text_input("🔍 Enter your textbook search query:", placeholder="Type what you want to find inside your files...")
+# User Query Box
+query_text = st.text_input("🔍 Ask a question about your textbook:", placeholder="e.g., What is a random graph?")
 
 if query_text:
-    with st.spinner("Searching document database chunks..."):
+    with st.spinner("Processing request..."):
         try:
-            # Escape single quotes in user input
             safe_query = query_text.replace("'", "''")
             
-            # Dynamically build the optional WHERE clause for file filtering
-            file_filter_clause = ""
-            if selected_file != "All Documents":
-                file_filter_clause = f"AND file_name = '{selected_file.replace("'", "''")}'"
+            # Word-by-word token split scoring
+            words = [w.strip().lower() for w in safe_query.split() if len(w.strip()) > 2]
+            like_clauses = " + ".join([f"(CASE WHEN LOWER(chunk_text) LIKE '%{w}%' THEN 0.15 ELSE 0.0 END)" for w in words])
+            if not like_clauses: like_clauses = "0.0"
 
-            # Re-calibrated scoring logic designed to hit 100% on high-quality keyword intersections
             search_sql = f"""
                 WITH search_query AS (
                     SELECT CAST(local_python_embed('{safe_query}') AS VECTOR(FLOAT, 384)) AS q_vec
@@ -100,60 +114,34 @@ if query_text:
                     file_name,
                     chunk_id,
                     chunk_text,
-                    -- Boosted Equation: Normalizes vector math and awards a large bonus for keyword alignment
-                    (
-                        (VECTOR_COSINE_SIMILARITY(CAST(chunk_vector AS VECTOR(FLOAT, 384)), q.q_vec) + 1.0) / 2.0 * 0.4
-                    ) + 
-                    (
-                        CASE WHEN LOWER(chunk_text) LIKE '%{safe_query.lower()}%' THEN 0.6 ELSE 0.0 END
-                    ) AS similarity
+                    ((VECTOR_COSINE_SIMILARITY(CAST(chunk_vector AS VECTOR(FLOAT, 384)), q.q_vec) + 1.0) / 2.0 * 0.5) + 
+                    (CASE WHEN ({like_clauses}) > 0.5 THEN 0.5 ELSE ({like_clauses}) END) AS similarity
                 FROM pdf_document_chunks, search_query q
-                WHERE 1=1 {file_filter_clause}
                 ORDER BY similarity DESC
-                LIMIT 5;
+                LIMIT 3;
             """
             
-            # Execute query and convert to a Pandas DataFrame
             raw_results_df = session.sql(search_sql).to_pandas()
-            
-            # Filter the Pandas dataframe based on the slider state selection
             results_df = raw_results_df[raw_results_df["SIMILARITY"] * 100 >= min_relevance]
             
-            # Render the Results UI
-            st.subheader("📚 Top Matching Document Segments")
-            
             if results_df.empty:
-                st.warning(f"⚠️ No matches met your {min_relevance}% relevance cutoff. Try lowering the sidebar slider or expanding your search query terms.")
+                st.warning("⚠️ No matching content found above your cutoff. Try lowering the sidebar slider.")
             else:
+                # OPTION 1: CONVERSATIONAL ANSWER GENERATION (If API Key Present)
+                if active_api_key:
+                    context_block = "\n".join([row['CHUNK_TEXT'] for idx, row in results_df.iterrows()])
+                    answer = ask_free_llm(query_text, context_block, active_api_key)
+                    
+                    st.subheader("💡 AI Professor Answer")
+                    st.write(answer)
+                    st.markdown("---")
+                
+                # OPTION 2: SOURCE DATA RETRIEVAL (Always Runs)
+                st.subheader("📚 Verified References Used From Snowflake")
                 for idx, row in results_df.iterrows():
-                    with st.container():
-                        st.markdown(f"📁 **Source File:** `{row['FILE_NAME']}` | **Chunk:** `{int(row['CHUNK_ID'])}`")
+                    with st.expander(f"📄 {row['FILE_NAME']} (Chunk {int(row['CHUNK_ID'])}) - Match: {float(row['SIMILARITY'])*100:.1f}%"):
                         st.info(row['CHUNK_TEXT'])
                         
-                        # Format the floating-point vector similarity match percentage
-                        match_percentage = float(row['SIMILARITY']) * 100
-                        # Cap values at 100% for aesthetic UI uniformity
-                        if match_percentage > 100.0:
-                            match_percentage = 100.0
-                            
-                        # Layout row for metadata and the new download action item
-                        col_score, col_btn = st.columns([4, 1])
-                        
-                        with col_score:
-                            st.caption(f"🎯 Relevance Score: **{match_percentage:.2f}%**")
-                        
-                        with col_btn:
-                            # NEW: Native local download attachment generation feature
-                            clean_filename = f"chunk_{int(row['CHUNK_ID'])}.txt"
-                            st.download_button(
-                                label="💾 Save text",
-                                data=row['CHUNK_TEXT'],
-                                file_name=clean_filename,
-                                mime="text/plain",
-                                key=f"dl_{int(row['CHUNK_ID'])}_{idx}" # Unique key required by Streamlit loop
-                            )
-                        st.divider()
-                        
-        except Exception as sql_error:
-            st.error("🚨 An error occurred during database vector calculation!")
-            st.exception(sql_error)
+        except Exception as e:
+            st.error("🚨 System Execution Error")
+            st.exception(e)
