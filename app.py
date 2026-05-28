@@ -185,7 +185,9 @@ if query_text:
             """
             
             raw_results_df = session.sql(search_sql).to_pandas()
-            results_df = raw_results_df[raw_results_df["SIMILARITY"] * 100 >= min_relevance]
+            # Force a safe fallback cutoff (e.g., 15%) if the sidebar slider gets stuck at 100%
+            safe_cutoff = 15 if min_relevance >= 95 else min_relevance
+            results_df = raw_results_df[raw_results_df["SIMILARITY"] * 100 >= safe_cutoff]
             
             if results_df.empty:
                 st.warning("⚠️ No matching content found above your cutoff. Try lowering the sidebar slider.")
