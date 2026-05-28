@@ -203,14 +203,13 @@ if prompt_input := st.chat_input("Ask a question about your textbook (e.g., What
                     answer = "📄 **Offline Retrieval Output:** Text fragments matched successfully. Select an AI engine provider to synthesize answers."
                 
                 st.write(answer)
-                
+
                 # Render the expandable reference drawer under the assistant text block
                 if current_references:
                     with st.expander("📚 View Snowflake References Used"):
                         for ref in current_references:
-                        # Render reference details inside the loop
-                        st.markdown(f"**File:** {ref['file']} (Chunk {ref['id']}) — **Match:** {ref['score']:.1f}%")
-                        st.info(ref['text'])
+                            st.markdown(f"**File:** {ref['file']} (Chunk {ref['id']}) — **Match:** {ref['score']:.1f}%")
+                            st.info(ref['text'])
             
             # Append complete execution package to app state records
             st.session_state.messages.append({
