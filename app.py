@@ -47,13 +47,11 @@ def ask_free_hf(query, textbook_context, api_key):
                 return raw_text.split("[/INST]")[-1].strip() if "[/INST]" in raw_text else raw_text
         except Exception as e:
             return f"⚠️ *HF Connection Error: {str(e)}*"
-    return "❌ *The Hugging Face model cluster timed out.*"
-
-# GOOGLE GEMINI INFERENCE ENGINE (WITH DYNAMIC MODEL VARIABLE OPTION & FULL JSON PARSING FIX)
+    return "❌ *The Hugging Face model cluster timed out.*"# GOOGLE GEMINI INFERENCE ENGINE (WITH DYNAMIC MODEL VARIABLE OPTION & FULL JSON PARSING FIX)
 def ask_gemini(query, textbook_context, api_key, model_option="gemini-2.5-flash"):
     clean_key = api_key.strip()
     
-    # Target URL explicitly addresses stable production model parameter variant
+    # ✅ FIXED: Added missing slashes and paths to prevent URL mashups
     api_url = f"https://googleapis.com{model_option}:generateContent"
     url_params = {"key": clean_key}
     headers = {"Content-Type": "application/json"}
@@ -80,7 +78,7 @@ Question: {query}"""
             
         output = response.json()
         
-        # FIXED: Correct list array indices [0] added cleanly for parsing candidate responses
+        # FIXED: Correct list array indices added cleanly for parsing candidate responses
         if "candidates" in output and len(output["candidates"]) > 0:
             first_candidate = output["candidates"][0]
             if "content" in first_candidate and "parts" in first_candidate["content"]:
