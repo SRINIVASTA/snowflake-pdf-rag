@@ -46,7 +46,7 @@ if query_text:
             # Escape single quotes in the user input to prevent SQL syntax errors
             safe_query = query_text.replace("'", "''")
             
-            # Updated to utilize our smart case-insensitive 384-dim local array function
+            # UPDATED: Hybrid Search (70% Vector Weight + 30% Keyword Bonus)
             search_sql = f"""
                 WITH search_query AS (
                     SELECT CAST(local_python_embed('{safe_query}') AS VECTOR(FLOAT, 384)) AS q_vec
@@ -55,7 +55,8 @@ if query_text:
                     file_name,
                     chunk_id,
                     chunk_text,
-                    VECTOR_COSINE_SIMILARITY(CAST(chunk_vector AS VECTOR(FLOAT, 384)), q.q_vec) AS similarity
+                    (VECTOR_COSINE_SIMILARITY(CAST(chunk_vector AS VECTOR(FLOAT, 384)), q.q_vec) * 0.7) + 
+                    (CASE WHEN LOWER(chunk_text) LIKE '%{safe_query.lower()}%' THEN 0.3 ELSE 0.0 END) AS similarity
                 FROM pdf_document_chunks, search_query q
                 ORDER BY similarity DESC
                 LIMIT 3;
