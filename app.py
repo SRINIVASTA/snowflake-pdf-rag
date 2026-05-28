@@ -49,12 +49,12 @@ def ask_free_hf(query, textbook_context, api_key):
             return f"⚠️ *HF Connection Error: {str(e)}*"
     return "❌ *The Hugging Face model cluster timed out.*"
 
-# GOOGLE GEMINI INFERENCE ENGINE (GEMINI-2.5-FLASH INFUSED)
-def ask_gemini(query, textbook_context, api_key):
+# GOOGLE GEMINI INFERENCE ENGINE (WITH DYNAMIC MODEL VARIABLE OPTION & FULL JSON PARSING FIX)
+def ask_gemini(query, textbook_context, api_key, model_option="gemini-2.5-flash"):
     clean_key = api_key.strip()
     
-    # Target URL explicitly addresses stable production gemini-2.5-flash channel
-    api_url = "https://googleapis.com"
+    # Target URL explicitly addresses stable production model parameter variant
+    api_url = f"https://googleapis.com{model_option}:generateContent"
     url_params = {"key": clean_key}
     headers = {"Content-Type": "application/json"}
     
@@ -80,9 +80,9 @@ Question: {query}"""
             
         output = response.json()
         
-        # FIXED: Corrected structural list index accessor assignment parsing mapping
+        # FIXED: Correct list array indices [0] added cleanly for parsing candidate responses
         if "candidates" in output and len(output["candidates"]) > 0:
-            first_candidate = output["candidates"][0] # <-- Fix applied here
+            first_candidate = output["candidates"][0]
             if "content" in first_candidate and "parts" in first_candidate["content"]:
                 parts = first_candidate["content"]["parts"]
                 if len(parts) > 0 and "text" in parts[0]:
@@ -108,14 +108,21 @@ with st.sidebar:
     # Provider Choice Selection
     provider = st.radio("Select AI Engine Provider:", ["Google Gemini", "Hugging Face", "Pure Offline (No AI)"])
     active_api_key = ""
+    gemini_model = "gemini-2.5-flash"  # Default fallback assignment definition
     
     if provider == "Google Gemini":
         secret_gemini = st.secrets.get("GOOGLE_API_KEY", "")
         manual_gemini = st.text_input("Enter Google API Key manually:", type="password", placeholder="AIzaSy...")
         active_api_key = manual_gemini if manual_gemini else secret_gemini
         
+        # MODULAR SELECTION INTERFACE BLOCK
+        gemini_model = st.selectbox(
+            "Select Gemini Model Version:",
+            ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
+        )
+        
         if active_api_key:
-            st.success("🤖 **Gemini Synthesis Active**")
+            st.success(f"🤖 **Gemini Synthesis Active ({gemini_model})**")
         else:
             st.info("💡 Paste a free Google API Key above or add `GOOGLE_API_KEY` to secrets.")
             
@@ -145,7 +152,6 @@ with st.sidebar:
         total_chunks = int(stats_df["TOTAL_CHUNKS"].iloc[0])
         total_files = int(stats_df["TOTAL_FILES"].iloc[0])
         
-        # Display as clean interactive metric cards
         col_files, col_chunks = st.columns(2)
         col_files.metric("Total Files", f"📁 {total_files}")
         col_chunks.metric("Total Chunks", f"🧩 {total_chunks}")
@@ -193,7 +199,7 @@ if query_text:
                 
                 # ROUTE SYNTHESIS REQUEST BASED ON ACTIVE PROVIDER
                 if provider == "Google Gemini" and active_api_key:
-                    answer = ask_gemini(query_text, context_block, active_api_key)
+                    answer = ask_gemini(query_text, context_block, active_api_key, model_option=gemini_model)
                     st.subheader("💡 AI Professor Answer (Gemini)")
                     st.write(answer)
                     st.markdown("---")
