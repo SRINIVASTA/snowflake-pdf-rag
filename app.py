@@ -47,6 +47,7 @@ with st.sidebar:
             FROM pdf_document_chunks;
         """).to_pandas()
         
+        # FIXED: Added the explicit indexing element parameters to avoid Pandas crashes
         total_chunks = int(stats_df["TOTAL_CHUNKS"].iloc[0])
         total_files = int(stats_df["TOTAL_FILES"].iloc[0])
         
