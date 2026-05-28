@@ -46,16 +46,16 @@ if query_text:
             # Escape single quotes in the user input to prevent SQL syntax errors
             safe_query = query_text.replace("'", "''")
             
-            # Cleaned SQL query referencing the native layout objects
+            # FIXED: Explicitly casting both the query array and column array into VECTOR(FLOAT, 384)
             search_sql = f"""
                 WITH search_query AS (
-                    SELECT local_python_embed('{safe_query}') AS q_vec
+                    SELECT CAST(local_python_embed('{safe_query}') AS VECTOR(FLOAT, 384)) AS q_vec
                 )
                 SELECT 
                     file_name,
                     chunk_id,
                     chunk_text,
-                    VECTOR_COSINE_SIMILARITY(chunk_vector, q.q_vec) AS similarity
+                    VECTOR_COSINE_SIMILARITY(CAST(chunk_vector AS VECTOR(FLOAT, 384)), q.q_vec) AS similarity
                 FROM pdf_document_chunks, search_query q
                 ORDER BY similarity DESC
                 LIMIT 3;
@@ -82,6 +82,6 @@ if query_text:
                         
         except Exception as sql_error:
             st.error("🚨 An error occurred during database vector calculation!")
-            st.info("This usually means your `local_python_embed` function or `pdf_document_chunks` table needs to be recreated in Snowflake.")
+            st.info("This usually means your `local_python_embed` function or `pdf_document_chunks` table needs to be checked in Snowflake.")
             # Print explicit raw traceback details directly to the developer canvas interface
             st.exception(sql_error)
