@@ -25,22 +25,24 @@ def get_snowflake_session():
             st.error("🔒 Missing Snowflake configuration secrets!")
             st.stop()
 
-# UPGRADED HUGGING FACE INFERENCE ENGINE WITH AUTO-RETRY
+# UPGRADED HUGGING FACE INFERENCE ENGINE WITH MISTRAL FALLBACK
 def ask_free_llm(query, textbook_context, api_key):
+    # FIXED: Swapped out gated Llama for open-access Mistral to resolve the 403 error
     api_url = "https://huggingface.co"
-    headers = {"Authorization": f"Bearer {api_key.strip()}"} # .strip() removes accidental spaces
+    headers = {"Authorization": f"Bearer {api_key.strip()}"}
     
-    prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are a professor teaching data science. Answer the student question using ONLY the textbook facts provided. 
-If the text does not contain the answer, say "I cannot find that in the textbook." Keep it concise and accurate.
+    # Prompt format adjusted cleanly for Mistral syntax
+    prompt = f"""<s>[INST] You are a professor teaching data science. 
+Answer the student question using ONLY the textbook facts provided below. 
+If the text does not contain the answer, say "I cannot find that in the textbook." 
+Keep your response concise, clear, and accurate.
 
 Textbook Context:
 {textbook_context}
-<|eot_id|><|start_header_id|>user<|end_header_id|>
-Question: {query}
-<|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
 
-    # Try up to 3 times if the model is waking up from sleep mode
+Question: {query} [/INST]"""
+
+    # Try up to 3 times if the free model cluster is waking up from sleep mode
     for attempt in range(3):
         try:
             response = requests.post(
@@ -60,15 +62,16 @@ Question: {query}
                 time.sleep(5)
                 continue
                 
-            # If the response isn't a successful 200, don't parse it as JSON
+            # Handle remaining access or congestion locks
             if response.status_code != 200:
-                return f"⚠️ *Server error status code: {response.status_code}. The free Hugging Face tier might be congested. Please try again.*"
+                return f"⚠️ *Server error status code: {response.status_code}. Please verify your API token has standard Inference permissions.*"
 
             output = response.json()
             if isinstance(output, list) and len(output) > 0 and "generated_text" in output:
                 raw_text = output["generated_text"]
-                if "<|start_header_id|>assistant<|end_header_id|>" in raw_text:
-                    return raw_text.split("<|start_header_id|>assistant<|end_header_id|>")[-1].strip()
+                # Mistral returns the whole prompt + response; split it to get just the final answer
+                if "[/INST]" in raw_text:
+                    return raw_text.split("[/INST]")[-1].strip()
                 return raw_text
                 
             return "⚠️ *The free AI cluster returned an unexpected format. Please re-submit your query.*"
