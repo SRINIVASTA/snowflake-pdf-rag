@@ -3,6 +3,7 @@ import requests
 import time
 from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark import Session
+from google import genai  # Official Google SDK
 
 # App Layout Configuration
 st.set_page_config(page_title="Multi-LLM Conversational RAG Engine", page_icon="🤖", layout="centered")
@@ -47,16 +48,15 @@ def ask_free_hf(query, textbook_context, api_key):
                 return raw_text.split("[/INST]")[-1].strip() if "[/INST]" in raw_text else raw_text
         except Exception as e:
             return f"⚠️ *HF Connection Error: {str(e)}*"
-    return "❌ *The Hugging Face model cluster timed out.*"# GOOGLE GEMINI INFERENCE ENGINE (WITH DYNAMIC MODEL VARIABLE OPTION & FULL JSON PARSING FIX)
+    return "❌ *The Hugging Face model cluster timed out.*"
+
+# GOOGLE GEMINI INFERENCE ENGINE (OFFICIAL SDK IMPLEMENTATION)
 def ask_gemini(query, textbook_context, api_key, model_option="gemini-2.5-flash"):
-    clean_key = api_key.strip()
-    
-    # ✅ FIXED: Added missing slashes and paths to prevent URL mashups
-    api_url = f"https://googleapis.com{model_option}:generateContent"
-    url_params = {"key": clean_key}
-    headers = {"Content-Type": "application/json"}
-    
-    prompt = f"""You are a professor teaching data science. 
+    try:
+        # Initialize official GenAI client using SDK standards
+        client = genai.Client(api_key=api_key.strip())
+        
+        prompt = f"""You are a professor teaching data science. 
 Answer the student question using ONLY the textbook facts provided below. 
 If the text does not contain the answer, say "I cannot find that in the textbook." 
 Keep your response concise, clear, and accurate.
@@ -66,29 +66,18 @@ Textbook Context:
 
 Question: {query}"""
 
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    
-    try:
-        response = requests.post(api_url, headers=headers, json=payload, params=url_params, timeout=15)
+        # Native SDK execution path
+        response = client.models.generate_content(
+            model=model_option,
+            contents=prompt,
+        )
         
-        if response.status_code == 400:
-            return "❌ *Google API Error: Invalid API Key structure or unauthorized project access.*"
-        if response.status_code != 200:
-            return f"⚠️ *Google Gemini server error code: {response.status_code} - Check your developer console logs.*"
-            
-        output = response.json()
+        if response.text:
+            return response.text.strip()
+        return "⚠️ *Google Gemini returned an empty response.*"
         
-        # FIXED: Correct list array indices added cleanly for parsing candidate responses
-        if "candidates" in output and len(output["candidates"]) > 0:
-            first_candidate = output["candidates"][0]
-            if "content" in first_candidate and "parts" in first_candidate["content"]:
-                parts = first_candidate["content"]["parts"]
-                if len(parts) > 0 and "text" in parts[0]:
-                    return parts[0]["text"].strip()
-                    
-        return "⚠️ *Google Gemini returned an unparseable response structure.*"
     except Exception as e:
-        return f"⚠️ *Google Gemini Connection Error: {str(e)}*"
+        return f"⚠️ *Google Gemini SDK Error: {str(e)}*"
 
 # Initialize Snowflake Session
 session = get_snowflake_session()
@@ -104,7 +93,11 @@ with st.sidebar:
     st.header("🔑 Authentication Mode")
     
     # Provider Choice Selection
-    provider = st.radio("Select AI Engine Provider:", ["Google Gemini", "Hugging Face", "Pure Offline (No AI)"])
+    provider = st.radio(
+        "Select AI Engine Provider:", 
+        ["Google Gemini", "Hugging Face", "Pure Offline (No AI)"],
+        index=0
+    )
     active_api_key = ""
     gemini_model = "gemini-2.5-flash"  # Default fallback assignment definition
     
@@ -113,16 +106,17 @@ with st.sidebar:
         manual_gemini = st.text_input("Enter Google API Key manually:", type="password", placeholder="AIzaSy...")
         active_api_key = manual_gemini if manual_gemini else secret_gemini
         
-        # MODULAR SELECTION INTERFACE BLOCK
+        # Dynamic dropdown selector for model versions
         gemini_model = st.selectbox(
             "Select Gemini Model Version:",
             ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
         )
         
         if active_api_key:
-            st.success(f"🤖 **Gemini Synthesis Active ({gemini_model})**")
+            st.success(f"🟢 **Gemini Engine Live ({gemini_model})**")
         else:
-            st.info("💡 Paste a free Google API Key above or add `GOOGLE_API_KEY` to secrets.")
+            st.warning("⚠️ **Missing Gemini API Key**")
+            st.info("💡 Paste your key above or add `GOOGLE_API_KEY` to your secrets configuration file.")
             
     elif provider == "Hugging Face":
         secret_hf = st.secrets.get("HUGGINGFACE_API_KEY", "")
@@ -130,12 +124,13 @@ with st.sidebar:
         active_api_key = manual_hf if manual_hf else secret_hf
         
         if active_api_key:
-            st.success("🤖 **Mistral AI Synthesis Active**")
+            st.success("🟢 **Mistral AI Engine Live**")
         else:
+            st.warning("⚠️ **Missing Hugging Face Token**")
             st.info("💡 Paste a free Read Token above or add `HUGGINGFACE_API_KEY` to secrets.")
             
     else:
-        st.info("Document fragments will be extracted cleanly without LLM processing.")
+        st.info("🔵 **Pure Offline Mode Selected**\n\nDocument chunks will be parsed cleanly from Snowflake without passing through third-party LLM systems.")
         
     st.markdown("---")
     st.header("📊 Database Status")
@@ -147,8 +142,9 @@ with st.sidebar:
             FROM pdf_document_chunks;
         """).to_pandas()
         
-        total_chunks = int(stats_df["TOTAL_CHUNKS"].iloc[0])
-        total_files = int(stats_df["TOTAL_FILES"].iloc[0])
+        # Safe structural integer indexing prevents column case mismatch bugs
+        total_chunks = int(stats_df.iloc[0, 0])
+        total_files = int(stats_df.iloc[0, 1])
         
         col_files, col_chunks = st.columns(2)
         col_files.metric("Total Files", f"📁 {total_files}")
@@ -158,6 +154,7 @@ with st.sidebar:
         
     st.markdown("---")
     min_relevance = st.slider("Minimum Relevance Cutoff (%)", min_value=0, max_value=100, value=20)
+
 
 # User Query Box
 query_text = st.text_input("🔍 Ask a question about your textbook:", placeholder="e.g., What is a random graph?")
