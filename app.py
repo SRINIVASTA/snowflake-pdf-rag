@@ -5,34 +5,55 @@ from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark import Session
 
 # App Layout Configuration
-st.set_page_config(page_title="AI Conversational RAG Engine", page_icon="🤖", layout="centered")
+st.set_page_config(page_title="Multi-LLM Conversational RAG Engine", page_icon="🤖", layout="centered")
 
 st.title("🤖 Dynamic AI Document RAG")
-st.caption("Powered by Snowflake, Streamlit & Hugging Face (Hybrid API & Offline Modes)")
+st.caption("Powered by Snowflake, Streamlit & Multi-LLM Routing (Free Tier APIs)")
 st.markdown("---")
 
 # DYNAMIC CONNECTION HANDLER FOR SNOWFLAKE
 @st.cache_resource
 def get_snowflake_session():
     try:
-        # 1. Try connecting natively inside Snowflake
         return get_active_session()
     except Exception:
-        # 2. Fallback: Connect from GitHub/Streamlit Cloud using secrets
         if "snowflake" in st.secrets:
             return Session.builder.configs(st.secrets["snowflake"]).create()
         else:
             st.error("🔒 Missing Snowflake configuration secrets!")
             st.stop()
 
-# UPGRADED HUGGING FACE INFERENCE ENGINE WITH MISTRAL FALLBACK
-def ask_free_llm(query, textbook_context, api_key):
-    # FIXED: Swapped out gated Llama for open-access Mistral to resolve the 403 error
+# HUGGING FACE INFERENCE ENGINE (MISTRAL)
+def ask_free_hf(query, textbook_context, api_key):
     api_url = "https://huggingface.co"
     headers = {"Authorization": f"Bearer {api_key.strip()}"}
+    prompt = f"<s>[INST] You are a professor teaching data science. Answer the student question using ONLY the textbook facts provided below. If the text does not contain the answer, say 'I cannot find that in the textbook.' Keep your response concise, clear, and accurate.\n\nTextbook Context:\n{textbook_context}\n\nQuestion: {query} [/INST]"
+
+    for attempt in range(3):
+        try:
+            response = requests.post(api_url, headers=headers, json={"inputs": prompt, "parameters": {"max_new_tokens": 250, "temperature": 0.2}}, timeout=15)
+            if response.status_code == 401:
+                return "❌ *Hugging Face API Error: Unauthorized Token.*"
+            if response.status_code == 503:
+                time.sleep(5)
+                continue
+            if response.status_code != 200:
+                return f"⚠️ *Hugging Face server error code: {response.status_code}*"
+            output = response.json()
+            if isinstance(output, list) and len(output) > 0 and "generated_text" in output:
+                raw_text = output["generated_text"]
+                return raw_text.split("[/INST]")[-1].strip() if "[/INST]" in raw_text else raw_text
+        except Exception as e:
+            return f"⚠️ *HF Connection Error: {str(e)}*"
+    return "❌ *The Hugging Face model cluster timed out.*"
+
+# GOOGLE GEMINI INFERENCE ENGINE 
+def ask_gemini(query, textbook_context, api_key):
+    # Utilizing Google's high-efficiency Gemini 1.5 Flash model available on the free tier catalog
+    api_url = f"https://googleapis.com{api_key.strip()}"
+    headers = {"Content-Type": "application/json"}
     
-    # Prompt format adjusted cleanly for Mistral syntax
-    prompt = f"""<s>[INST] You are a professor teaching data science. 
+    prompt = f"""You are a professor teaching data science. 
 Answer the student question using ONLY the textbook facts provided below. 
 If the text does not contain the answer, say "I cannot find that in the textbook." 
 Keep your response concise, clear, and accurate.
@@ -40,48 +61,24 @@ Keep your response concise, clear, and accurate.
 Textbook Context:
 {textbook_context}
 
-Question: {query} [/INST]"""
+Question: {query}"""
 
-    # Try up to 3 times if the free model cluster is waking up from sleep mode
-    for attempt in range(3):
-        try:
-            response = requests.post(
-                api_url, 
-                headers=headers, 
-                json={"inputs": prompt, "parameters": {"max_new_tokens": 250, "temperature": 0.2}},
-                timeout=15
-            )
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    
+    try:
+        response = requests.post(api_url, headers=headers, json=payload, timeout=15)
+        if response.status_code == 400:
+            return "❌ *Google API Error: Invalid API Key or request structure.*"
+        if response.status_code != 200:
+            return f"⚠️ *Google Gemini server error code: {response.status_code}*"
             
-            # Catch unauthorized tokens immediately
-            if response.status_code == 401:
-                return "❌ *Hugging Face API Error: Unauthorized. Please check that your Access Token is typed correctly and has 'Read' permissions.*"
-            
-            # Catch model loading states (503)
-            if response.status_code == 503:
-                st.warning(f"⏳ The free AI model is waking up from sleep mode. Retrying in 5 seconds... (Attempt {attempt + 1}/3)")
-                time.sleep(5)
-                continue
-                
-            # Handle remaining access or congestion locks
-            if response.status_code != 200:
-                return f"⚠️ *Server error status code: {response.status_code}. Please verify your API token has standard Inference permissions.*"
-
-            output = response.json()
-            if isinstance(output, list) and len(output) > 0 and "generated_text" in output:
-                raw_text = output["generated_text"]
-                # Mistral returns the whole prompt + response; split it to get just the final answer
-                if "[/INST]" in raw_text:
-                    return raw_text.split("[/INST]")[-1].strip()
-                return raw_text
-                
-            return "⚠️ *The free AI cluster returned an unexpected format. Please re-submit your query.*"
-            
-        except requests.exceptions.Timeout:
-            return "⏳ *The request timed out. The free Hugging Face model cluster is currently running slowly.*"
-        except Exception as e:
-            return f"⚠️ *API Connection Error: {str(e)}*"
-            
-    return "❌ *The AI model took too long to wake up. Please wait 10 seconds and try submitting your question again!*"
+        output = response.json()
+        # Parse the structured response format expected from the Gemini API gateway
+        if "candidates" in output and len(output["candidates"]) > 0:
+            return output["candidates"][0]["content"]["parts"][0]["text"].strip()
+        return "⚠️ *Google Gemini returned an unparseable response structure.*"
+    except Exception as e:
+        return f"⚠️ *Google Gemini Connection Error: {str(e)}*"
 
 # Initialize Snowflake Session
 session = get_snowflake_session()
@@ -92,46 +89,42 @@ except Exception:
     st.error("❌ Failed to set Snowflake Database Context!")
     st.stop()
 
-# SIDEBAR: DYNAMIC API CREDENTIAL CONTROLS
+# SIDEBAR: DYNAMIC MULTI-LLM API CREDENTIAL CONTROLS
 with st.sidebar:
     st.header("🔑 Authentication Mode")
     
-    # 1. Look for pre-configured secret token
-    secret_key = st.secrets.get("HUGGINGFACE_API_KEY", "")
+    # Provider Choice Selection
+    provider = st.radio("Select AI Engine Provider:", ["Google Gemini", "Hugging Face", "Pure Offline (No AI)"])
+    active_api_key = ""
     
-    # 2. Provide a manual input field on-screen
-    manual_key = st.text_input(
-        "Enter Hugging Face Token manually:", 
-        type="password", 
-        placeholder="hf_...",
-        help="Paste a free Read token from huggingface.co/settings/tokens to enable Conversational summaries."
-    )
-    
-    # Determine which key to activate
-    active_api_key = manual_key if manual_key else secret_key
-    
-    if active_api_key:
-        st.success("🤖 **Conversational Mode Active** (AI summary enabled)")
+    if provider == "Google Gemini":
+        secret_gemini = st.secrets.get("GOOGLE_API_KEY", "")
+        manual_gemini = st.text_input("Enter Google API Key manually:", type="password", placeholder="AIzaSy...")
+        active_api_key = manual_gemini if manual_gemini else secret_gemini
+        
+        if active_api_key:
+            st.success("🤖 **Gemini Synthesis Active**")
+        else:
+            st.info("💡 Paste a free Google API Key above or add `GOOGLE_API_KEY` to secrets.")
+            
+    elif provider == "Hugging Face":
+        secret_hf = st.secrets.get("HUGGINGFACE_API_KEY", "")
+        manual_hf = st.text_input("Enter Hugging Face Token manually:", type="password", placeholder="hf_...")
+        active_api_key = manual_hf if manual_hf else secret_hf
+        
+        if active_api_key:
+            st.success("🤖 **Mistral AI Synthesis Active**")
+        else:
+            st.info("💡 Paste a free Read Token above or add `HUGGINGFACE_API_KEY` to secrets.")
+            
     else:
-        st.info("📄 **Pure Search Mode Active** (Displaying source chunks directly without API)")
+        st.info("Document fragments will be extracted cleanly without LLM processing.")
         
     st.markdown("---")
     st.header("📊 Database Status")
     try:
-        stats_df = session.sql("""
-            SELECT 
-                COUNT(*) as total_chunks, 
-                COUNT(DISTINCT file_name) as total_files 
-            FROM pdf_document_chunks;
-        """).to_pandas()
-        
-        total_chunks = int(stats_df["TOTAL_CHUNKS"].iloc[0])
-        total_files = int(stats_df["TOTAL_FILES"].iloc[0])
-        
-        # Display as clean interactive metric cards
-        col_files, col_chunks = st.columns(2)
-        col_files.metric("Total Files", f"📁 {total_files}")
-        col_chunks.metric("Total Chunks", f"🧩 {total_chunks}")
+        stats_df = session.sql("SELECT COUNT(*) as total FROM pdf_document_chunks;").to_pandas()
+        st.success(f"🧩 Indexed Textbook Chunks: **{int(stats_df['TOTAL'].iloc[0])}**")
     except Exception:
         st.warning("Could not read real-time database rows.")
         
@@ -142,7 +135,7 @@ with st.sidebar:
 query_text = st.text_input("🔍 Ask a question about your textbook:", placeholder="e.g., What is a random graph?")
 
 if query_text:
-    with st.spinner("Processing request..."):
+    with st.spinner("Processing framework vector alignments..."):
         try:
             safe_query = query_text.replace("'", "''")
             
@@ -172,22 +165,26 @@ if query_text:
             if results_df.empty:
                 st.warning("⚠️ No matching content found above your cutoff. Try lowering the sidebar slider.")
             else:
-                # OPTION 1: CONVERSATIONAL ANSWER GENERATION (If API Key Present)
-                if active_api_key:
-                    context_block = "\n".join([row['CHUNK_TEXT'] for idx, row in results_df.iterrows()])
-                    answer = ask_free_llm(query_text, context_block, active_api_key)
-                    
-                    st.subheader("💡 AI Professor Answer")
+                context_block = "\n".join([row['CHUNK_TEXT'] for idx, row in results_df.iterrows()])
+                
+                # ROUTE SYNTHESIS REQUEST BASED ON ACTIVE PROVIDER
+                if provider == "Google Gemini" and active_api_key:
+                    answer = ask_gemini(query_text, context_block, active_api_key)
+                    st.subheader("💡 AI Professor Answer (Gemini)")
+                    st.write(answer)
+                    st.markdown("---")
+                elif provider == "Hugging Face" and active_api_key:
+                    answer = ask_free_hf(query_text, context_block, active_api_key)
+                    st.subheader("💡 AI Professor Answer (Mistral)")
                     st.write(answer)
                     st.markdown("---")
                 
-                # OPTION 2: SOURCE DATA RETRIEVAL (Always Runs)
+                # ALWAYS RUN NATIVE SOURCE RETRIEVAL VIEW
                 st.subheader("📚 Verified References Used From Snowflake")
                 for idx, row in results_df.iterrows():
                     with st.expander(f"📄 {row['FILE_NAME']} (Chunk {int(row['CHUNK_ID'])}) - Match: {float(row['SIMILARITY'])*100:.1f}%"):
                         st.info(row['CHUNK_TEXT'])
                         
-                        # Layout row for download options
                         clean_filename = f"chunk_{int(row['CHUNK_ID'])}.txt"
                         st.download_button(
                             label="💾 Save chunk text",
