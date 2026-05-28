@@ -15,8 +15,10 @@ st.markdown("---")
 @st.cache_resource
 def get_snowflake_session():
     try:
+        # 1. Try connecting natively inside Snowflake
         return get_active_session()
     except Exception:
+        # 2. Fallback: Connect from GitHub/Streamlit Cloud using secrets
         if "snowflake" in st.secrets:
             return Session.builder.configs(st.secrets["snowflake"]).create()
         else:
@@ -47,10 +49,11 @@ def ask_free_hf(query, textbook_context, api_key):
             return f"⚠️ *HF Connection Error: {str(e)}*"
     return "❌ *The Hugging Face model cluster timed out.*"
 
-# GOOGLE GEMINI INFERENCE ENGINE 
+# GOOGLE GEMINI INFERENCE ENGINE (FIXED ARRAY INDEX PARSING)
 def ask_gemini(query, textbook_context, api_key):
-    # Utilizing Google's high-efficiency Gemini 1.5 Flash model available on the free tier catalog
-    api_url = f"https://googleapis.com{api_key.strip()}"
+    clean_key = api_key.strip()
+    api_url = "https://googleapis.com"
+    url_params = {"key": clean_key}
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""You are a professor teaching data science. 
@@ -66,16 +69,23 @@ Question: {query}"""
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     
     try:
-        response = requests.post(api_url, headers=headers, json=payload, timeout=15)
+        response = requests.post(api_url, headers=headers, json=payload, params=url_params, timeout=15)
+        
         if response.status_code == 400:
-            return "❌ *Google API Error: Invalid API Key or request structure.*"
+            return "❌ *Google API Error: Invalid API Key structure or unauthorized project access.*"
         if response.status_code != 200:
-            return f"⚠️ *Google Gemini server error code: {response.status_code}*"
+            return f"⚠️ *Google Gemini server error code: {response.status_code} - Check your developer console logs.*"
             
         output = response.json()
-        # Parse the structured response format expected from the Gemini API gateway
+        
+        # FIXED: Added [0] index accessor step for structural list navigation mapping
         if "candidates" in output and len(output["candidates"]) > 0:
-            return output["candidates"][0]["content"]["parts"][0]["text"].strip()
+            first_candidate = output["candidates"][0] # <-- Fix: Drill into first array element
+            if "content" in first_candidate and "parts" in first_candidate["content"]:
+                parts = first_candidate["content"]["parts"]
+                if len(parts) > 0 and "text" in parts:
+                    return parts["text"].strip()
+                    
         return "⚠️ *Google Gemini returned an unparseable response structure.*"
     except Exception as e:
         return f"⚠️ *Google Gemini Connection Error: {str(e)}*"
@@ -123,8 +133,20 @@ with st.sidebar:
     st.markdown("---")
     st.header("📊 Database Status")
     try:
-        stats_df = session.sql("SELECT COUNT(*) as total FROM pdf_document_chunks;").to_pandas()
-        st.success(f"🧩 Indexed Textbook Chunks: **{int(stats_df['TOTAL'].iloc[0])}**")
+        stats_df = session.sql("""
+            SELECT 
+                COUNT(*) as total_chunks, 
+                COUNT(DISTINCT file_name) as total_files 
+            FROM pdf_document_chunks;
+        """).to_pandas()
+        
+        total_chunks = int(stats_df["TOTAL_CHUNKS"].iloc[0])
+        total_files = int(stats_df["TOTAL_FILES"].iloc[0])
+        
+        # Display as clean interactive metric cards
+        col_files, col_chunks = st.columns(2)
+        col_files.metric("Total Files", f"📁 {total_files}")
+        col_chunks.metric("Total Chunks", f"🧩 {total_chunks}")
     except Exception:
         st.warning("Could not read real-time database rows.")
         
@@ -184,16 +206,8 @@ if query_text:
                 for idx, row in results_df.iterrows():
                     with st.expander(f"📄 {row['FILE_NAME']} (Chunk {int(row['CHUNK_ID'])}) - Match: {float(row['SIMILARITY'])*100:.1f}%"):
                         st.info(row['CHUNK_TEXT'])
-                        
                         clean_filename = f"chunk_{int(row['CHUNK_ID'])}.txt"
                         st.download_button(
                             label="💾 Save chunk text",
                             data=row['CHUNK_TEXT'],
-                            file_name=clean_filename,
-                            mime="text/plain",
-                            key=f"dl_{int(row['CHUNK_ID'])}_{idx}"
-                        )
-                        
-        except Exception as e:
-            st.error("🚨 System Execution Error")
-            st.exception(e)
+                            file_name=clean_filename,mime="text/plain",key=f"dl_{int(row['CHUNK_ID'])}_{idx}")except Exception as e:st.error("🚨 System Execution Error")st.exception(e)
