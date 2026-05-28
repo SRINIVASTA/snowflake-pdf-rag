@@ -3,17 +3,17 @@ from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark import Session
 
 # App Layout Configuration
-st.set_page_config(page_title="Offline PDF RAG Search", page_icon="📄", layout="centered")
+st.set_page_config(page_title="Pure Offline PDF Search", page_icon="📄", layout="centered")
 
-st.title("📄 Offline Document Search (RAG)")
-st.caption("Powered by Snowflake, Streamlit & GitHub")
+st.title("📄 Pure Offline Document Search")
+st.caption("Powered by Snowflake, Streamlit & GitHub (Zero External APIs)")
 st.markdown("---")
 
 # DYNAMIC CONNECTION HANDLER
 @st.cache_resource
 def get_snowflake_session():
     try:
-        # 1. Try connecting natively inside Snowflake (Streamlit in Snowflake)
+        # 1. Try connecting natively inside Snowflake
         return get_active_session()
     except Exception:
         # 2. Fallback: Connect from GitHub/Streamlit Cloud using secrets
@@ -21,7 +21,6 @@ def get_snowflake_session():
             return Session.builder.configs(st.secrets["snowflake"]).create()
         else:
             st.error("🔒 Missing Snowflake configuration secrets in Streamlit Cloud Dashboard!")
-            st.info("Please verify your `.streamlit/secrets.toml` file or Streamlit Cloud Advanced Settings.")
             st.stop()
 
 # Initialize session
@@ -33,20 +32,63 @@ try:
     session.sql("USE SCHEMA DATA;").collect()
 except Exception as context_error:
     st.error("❌ Failed to set Snowflake Database Context!")
-    st.warning("Make sure RAG_DEMO_DB and SCHEMA DATA exist in your account and your role has access.")
-    st.exception(context_error)
     st.stop()
 
+# SIDEBAR: Fetch stats and unique files dynamically from the database table
+with st.sidebar:
+    st.header("📊 Database Statistics")
+    
+    try:
+        # Fetch total rows (chunks) and distinct files in one quick query
+        stats_df = session.sql("""
+            SELECT 
+                COUNT(*) as total_chunks, 
+                COUNT(DISTINCT file_name) as total_files 
+            FROM pdf_document_chunks;
+        """).to_pandas()
+        
+        total_chunks = int(stats_df["TOTAL_CHUNKS"].iloc[0])
+        total_files = int(stats_df["TOTAL_FILES"].iloc[0])
+        
+        # Display as clean interactive metric cards
+        col_files, col_chunks = st.columns(2)
+        col_files.metric("Total Files", f"📁 {total_files}")
+        col_chunks.metric("Total Chunks", f"🧩 {total_chunks}")
+        
+    except Exception:
+        st.warning("⚠️ Could not read real-time table statistics from Snowflake.")
+    
+    st.markdown("---")
+    st.header("🔍 Document Filters")
+    
+    try:
+        # Pull distinct uploaded filenames currently in the chunk table
+        distinct_files_df = session.sql("SELECT DISTINCT file_name FROM pdf_document_chunks ORDER BY file_name;").to_pandas()
+        file_options = ["All Documents"] + distinct_files_df["FILE_NAME"].tolist()
+    except Exception:
+        file_options = ["All Documents"]
+        st.warning("Could not read uploaded document names from database.")
+
+    # Render the selector dropdown
+    selected_file = st.selectbox("Select document to search within:", options=file_options)
+    st.divider()
+    st.info("Filtering updates your SQL query to scan only the chunks belonging to your selection.")
+
 # User Input Box
-query_text = st.text_input("🔍 Enter your search query:", placeholder="Type what you want to find inside your PDFs...")
+query_text = st.text_input("🔍 Enter your textbook search query:", placeholder="Type what you want to find inside your files...")
 
 if query_text:
-    with st.spinner("Searching document vector database..."):
+    with st.spinner("Searching document database chunks..."):
         try:
-            # Escape single quotes in the user input to prevent SQL syntax errors
+            # Escape single quotes in user input
             safe_query = query_text.replace("'", "''")
             
-            # UPDATED: Hybrid Search (70% Vector Weight + 30% Keyword Bonus)
+            # Dynamically build the optional WHERE clause for file filtering
+            file_filter_clause = ""
+            if selected_file != "All Documents":
+                file_filter_clause = f"AND file_name = '{selected_file.replace("'", "''")}'"
+
+            # Hybrid Search query with contextual filtering injection
             search_sql = f"""
                 WITH search_query AS (
                     SELECT CAST(local_python_embed('{safe_query}') AS VECTOR(FLOAT, 384)) AS q_vec
@@ -58,18 +100,19 @@ if query_text:
                     (VECTOR_COSINE_SIMILARITY(CAST(chunk_vector AS VECTOR(FLOAT, 384)), q.q_vec) * 0.7) + 
                     (CASE WHEN LOWER(chunk_text) LIKE '%{safe_query.lower()}%' THEN 0.3 ELSE 0.0 END) AS similarity
                 FROM pdf_document_chunks, search_query q
+                WHERE 1=1 {file_filter_clause}
                 ORDER BY similarity DESC
                 LIMIT 3;
             """
             
-            # Execute query and convert the dataset straight into a Pandas DataFrame
+            # Execute query and convert to a Pandas DataFrame
             results_df = session.sql(search_sql).to_pandas()
             
             # Render the Results UI
             st.subheader("📚 Top Matching Document Segments")
             
             if results_df.empty:
-                st.warning("⚠️ No matches found. Ensure your `pdf_document_chunks` database table contains data rows.")
+                st.warning(f"⚠️ No matches found. Make sure your database table contains data rows for '{selected_file}'.")
             else:
                 for idx, row in results_df.iterrows():
                     with st.container():
@@ -83,6 +126,4 @@ if query_text:
                         
         except Exception as sql_error:
             st.error("🚨 An error occurred during database vector calculation!")
-            st.info("This usually means your `local_python_embed` function or `pdf_document_chunks` table needs to be checked in Snowflake.")
-            # Print explicit raw traceback details directly to the developer canvas interface
             st.exception(sql_error)
