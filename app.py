@@ -125,12 +125,6 @@ with st.sidebar:
         st.info("🔵 **Pure Offline Mode Selected**")
         
     st.markdown("---")
-    st.header("📤 Document Ingestion")
-    uploaded_file = st.file_uploader("Upload new textbook PDF:", type=["pdf"])
-    if uploaded_file is not None:
-        st.info("🔄 Document received. Hook this up to your chunking/embedding stage.")
-        
-    st.markdown("---")
     st.header("📊 Database Status")
     try:
         stats_df = session.sql("SELECT COUNT(*) as total_chunks, COUNT(DISTINCT file_name) as total_files FROM pdf_document_chunks;").to_pandas()
@@ -209,12 +203,14 @@ if prompt_input := st.chat_input("Ask a question about your textbook (e.g., What
                     answer = "📄 **Offline Retrieval Output:** Text fragments matched successfully. Select an AI engine provider to synthesize answers."
                 
                 st.write(answer)
+                
                 # Render the expandable reference drawer under the assistant text block
                 if current_references:
                     with st.expander("📚 View Snowflake References Used"):
                         for ref in current_references:
-                            st.markdown(f"**File:** {ref['file']} (Chunk {ref['id']}) — **Match:** {ref['score']:.1f}%")
-                            st.info(ref['text'])
+                        # Render reference details inside the loop
+                        st.markdown(f"**File:** {ref['file']} (Chunk {ref['id']}) — **Match:** {ref['score']:.1f}%")
+                        st.info(ref['text'])
             
             # Append complete execution package to app state records
             st.session_state.messages.append({
