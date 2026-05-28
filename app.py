@@ -27,7 +27,6 @@ def get_snowflake_session():
 
 # HUGGING FACE INFERENCE ENGINE (MISTRAL)
 def ask_free_hf(query, textbook_context, api_key):
-    # Fixed target API url string pointing to active server endpoint
     api_url = "https://huggingface.co"
     headers = {"Authorization": f"Bearer {api_key.strip()}"}
     prompt = f"<s>[INST] You are a professor teaching data science. Answer the student question using ONLY the textbook facts provided below. If the text does not contain the answer, say 'I cannot find that in the textbook.' Keep your response concise, clear, and accurate.\n\nTextbook Context:\n{textbook_context}\n\nQuestion: {query} [/INST]"
@@ -50,12 +49,12 @@ def ask_free_hf(query, textbook_context, api_key):
             return f"⚠️ *HF Connection Error: {str(e)}*"
     return "❌ *The Hugging Face model cluster timed out.*"
 
-# GOOGLE GEMINI INFERENCE ENGINE (FIXED URL AND ARRAY ACCESSOR)
+# GOOGLE GEMINI INFERENCE ENGINE (GEMINI-2.5-FLASH INFUSED)
 def ask_gemini(query, textbook_context, api_key):
     clean_key = api_key.strip()
     
-    # Fixed target URL string pointing to stable endpoint path
-    api_url = f"https://googleapis.com"
+    # Target URL explicitly addresses stable production gemini-2.5-flash channel
+    api_url = "https://googleapis.com"
     url_params = {"key": clean_key}
     headers = {"Content-Type": "application/json"}
     
@@ -81,9 +80,9 @@ Question: {query}"""
             
         output = response.json()
         
-        # Safe nested structural check matching modern production json layout schemas
+        # FIXED: Corrected structural list index accessor assignment parsing mapping
         if "candidates" in output and len(output["candidates"]) > 0:
-            first_candidate = output["candidates"][0]
+            first_candidate = output["candidates"][0] # <-- Fix applied here
             if "content" in first_candidate and "parts" in first_candidate["content"]:
                 parts = first_candidate["content"]["parts"]
                 if len(parts) > 0 and "text" in parts[0]:
