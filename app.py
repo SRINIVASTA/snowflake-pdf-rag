@@ -57,7 +57,7 @@ with st.sidebar:
     st.markdown("---")
     st.header("🎛️ Search Adjustments")
     
-    # NEW: Relevance Threshold Slider to filter out junk matches
+    # Relevance Threshold Slider to filter out junk matches
     min_relevance = st.slider(
         "Minimum Relevance Cutoff (%)", 
         min_value=0, 
@@ -136,7 +136,22 @@ if query_text:
                         if match_percentage > 100.0:
                             match_percentage = 100.0
                             
-                        st.caption(f"🎯 Relevance Score: **{match_percentage:.2f}%**")
+                        # Layout row for metadata and the new download action item
+                        col_score, col_btn = st.columns([4, 1])
+                        
+                        with col_score:
+                            st.caption(f"🎯 Relevance Score: **{match_percentage:.2f}%**")
+                        
+                        with col_btn:
+                            # NEW: Native local download attachment generation feature
+                            clean_filename = f"chunk_{int(row['CHUNK_ID'])}.txt"
+                            st.download_button(
+                                label="💾 Save text",
+                                data=row['CHUNK_TEXT'],
+                                file_name=clean_filename,
+                                mime="text/plain",
+                                key=f"dl_{int(row['CHUNK_ID'])}_{idx}" # Unique key required by Streamlit loop
+                            )
                         st.divider()
                         
         except Exception as sql_error:
