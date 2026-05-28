@@ -51,22 +51,26 @@ def ask_free_hf(query, textbook_context, api_key):
     return "❌ *The Hugging Face model cluster timed out.*"
 
 # GOOGLE GEMINI INFERENCE ENGINE (OFFICIAL SDK IMPLEMENTATION)
+# GOOGLE GEMINI INFERENCE ENGINE (OFFICIAL SDK IMPLEMENTATION WITH OPTIMIZED PROMPT)
 def ask_gemini(query, textbook_context, api_key, model_option="gemini-2.5-flash"):
     try:
-        # Initialize official GenAI client using SDK standards
         client = genai.Client(api_key=api_key.strip())
         
-        prompt = f"""You are a professor teaching data science. 
-Answer the student question using ONLY the textbook facts provided below. 
-If the text does not contain the answer, say "I cannot find that in the textbook." 
-Keep your response concise, clear, and accurate.
+        # Optimized prompt allowing the professor to synthesize and explain concepts 
+        prompt = f"""You are a helpful and knowledgeable data science professor. 
+Answer the student's question using the textbook context provided below. 
 
-Textbook Context:
+INSTRUCTIONS:
+1. Provide a comprehensive, clear, and technical explanation based on the context.
+2. If the context does not explicitly define the term but discusses relevant properties, equations, or examples, use that information to explain the concept.
+3. Only say "I cannot find that in the textbook" if the provided context is completely unrelated to the topic of the question.
+
+TEXTBOOK CONTEXT:
 {textbook_context}
 
-Question: {query}"""
+STUDENT QUESTION:
+{query}"""
 
-        # Native SDK execution path
         response = client.models.generate_content(
             model=model_option,
             contents=prompt,
