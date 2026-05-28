@@ -210,4 +210,18 @@ if query_text:
                         st.download_button(
                             label="💾 Save chunk text",
                             data=row['CHUNK_TEXT'],
-                            file_name=clean_filename,mime="text/plain",key=f"dl_{int(row['CHUNK_ID'])}_{idx}")except Exception as e:st.error("🚨 System Execution Error")st.exception(e)
+                                                    # Cleanly layout the download button block
+                        clean_filename = f"chunk_{int(row['CHUNK_ID'])}.txt"
+                        st.download_button(
+                            label="💾 Save chunk text",
+                            data=row['CHUNK_TEXT'],
+                            file_name=clean_filename,
+                            mime="text/plain",
+                            key=f"dl_{int(row['CHUNK_ID'])}_{idx}"
+                        )
+                        
+        except Exception as e:
+            # This handles the main calculation try-block on a clean line
+            st.error("🚨 System Execution Error")
+            st.exception(e)
+    
