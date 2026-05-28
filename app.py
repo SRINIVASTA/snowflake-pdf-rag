@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import time
 from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark import Session
 
@@ -14,18 +15,20 @@ st.markdown("---")
 @st.cache_resource
 def get_snowflake_session():
     try:
+        # 1. Try connecting natively inside Snowflake
         return get_active_session()
     except Exception:
+        # 2. Fallback: Connect from GitHub/Streamlit Cloud using secrets
         if "snowflake" in st.secrets:
             return Session.builder.configs(st.secrets["snowflake"]).create()
         else:
             st.error("🔒 Missing Snowflake configuration secrets!")
             st.stop()
 
-# HUGGING FACE INFERENCE ENGINE
+# UPGRADED HUGGING FACE INFERENCE ENGINE WITH AUTO-RETRY
 def ask_free_llm(query, textbook_context, api_key):
     api_url = "https://huggingface.co"
-    headers = {"Authorization": f"Bearer {api_key}"}
+    headers = {"Authorization": f"Bearer {api_key.strip()}"} # .strip() removes accidental spaces
     
     prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 You are a professor teaching data science. Answer the student question using ONLY the textbook facts provided. 
@@ -37,18 +40,45 @@ Textbook Context:
 Question: {query}
 <|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
 
-    try:
-        response = requests.post(api_url, headers=headers, json={"inputs": prompt, "parameters": {"max_new_tokens": 250, "temperature": 0.2}})
-        output = response.json()
-        
-        if isinstance(output, list) and len(output) > 0 and "generated_text" in output:
-            raw_text = output["generated_text"]
-            if "<|start_header_id|>assistant<|end_header_id|>" in raw_text:
-                return raw_text.split("<|start_header_id|>assistant<|end_header_id|>")[-1].strip()
-            return raw_text
-        return "⚠️ *The free AI cluster is temporarily busy. Please re-submit your query in a few moments.*"
-    except Exception as e:
-        return f"⚠️ *API Connection Error: {str(e)}*"
+    # Try up to 3 times if the model is waking up from sleep mode
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                api_url, 
+                headers=headers, 
+                json={"inputs": prompt, "parameters": {"max_new_tokens": 250, "temperature": 0.2}},
+                timeout=15
+            )
+            
+            # Catch unauthorized tokens immediately
+            if response.status_code == 401:
+                return "❌ *Hugging Face API Error: Unauthorized. Please check that your Access Token is typed correctly and has 'Read' permissions.*"
+            
+            # Catch model loading states (503)
+            if response.status_code == 503:
+                st.warning(f"⏳ The free AI model is waking up from sleep mode. Retrying in 5 seconds... (Attempt {attempt + 1}/3)")
+                time.sleep(5)
+                continue
+                
+            # If the response isn't a successful 200, don't parse it as JSON
+            if response.status_code != 200:
+                return f"⚠️ *Server error status code: {response.status_code}. The free Hugging Face tier might be congested. Please try again.*"
+
+            output = response.json()
+            if isinstance(output, list) and len(output) > 0 and "generated_text" in output:
+                raw_text = output["generated_text"]
+                if "<|start_header_id|>assistant<|end_header_id|>" in raw_text:
+                    return raw_text.split("<|start_header_id|>assistant<|end_header_id|>")[-1].strip()
+                return raw_text
+                
+            return "⚠️ *The free AI cluster returned an unexpected format. Please re-submit your query.*"
+            
+        except requests.exceptions.Timeout:
+            return "⏳ *The request timed out. The free Hugging Face model cluster is currently running slowly.*"
+        except Exception as e:
+            return f"⚠️ *API Connection Error: {str(e)}*"
+            
+    return "❌ *The AI model took too long to wake up. Please wait 10 seconds and try submitting your question again!*"
 
 # Initialize Snowflake Session
 session = get_snowflake_session()
@@ -66,7 +96,7 @@ with st.sidebar:
     # 1. Look for pre-configured secret token
     secret_key = st.secrets.get("HUGGINGFACE_API_KEY", "")
     
-    # 2. Provide a manual manual input field on-screen
+    # 2. Provide a manual input field on-screen
     manual_key = st.text_input(
         "Enter Hugging Face Token manually:", 
         type="password", 
@@ -85,8 +115,20 @@ with st.sidebar:
     st.markdown("---")
     st.header("📊 Database Status")
     try:
-        stats_df = session.sql("SELECT COUNT(*) as total FROM pdf_document_chunks;").to_pandas()
-        st.success(f"🧩 Indexed Textbook Chunks: **{int(stats_df['TOTAL'].iloc[0])}**")
+        stats_df = session.sql("""
+            SELECT 
+                COUNT(*) as total_chunks, 
+                COUNT(DISTINCT file_name) as total_files 
+            FROM pdf_document_chunks;
+        """).to_pandas()
+        
+        total_chunks = int(stats_df["TOTAL_CHUNKS"].iloc[0])
+        total_files = int(stats_df["TOTAL_FILES"].iloc[0])
+        
+        # Display as clean interactive metric cards
+        col_files, col_chunks = st.columns(2)
+        col_files.metric("Total Files", f"📁 {total_files}")
+        col_chunks.metric("Total Chunks", f"🧩 {total_chunks}")
     except Exception:
         st.warning("Could not read real-time database rows.")
         
@@ -141,6 +183,16 @@ if query_text:
                 for idx, row in results_df.iterrows():
                     with st.expander(f"📄 {row['FILE_NAME']} (Chunk {int(row['CHUNK_ID'])}) - Match: {float(row['SIMILARITY'])*100:.1f}%"):
                         st.info(row['CHUNK_TEXT'])
+                        
+                        # Layout row for download options
+                        clean_filename = f"chunk_{int(row['CHUNK_ID'])}.txt"
+                        st.download_button(
+                            label="💾 Save chunk text",
+                            data=row['CHUNK_TEXT'],
+                            file_name=clean_filename,
+                            mime="text/plain",
+                            key=f"dl_{int(row['CHUNK_ID'])}_{idx}"
+                        )
                         
         except Exception as e:
             st.error("🚨 System Execution Error")
