@@ -3,9 +3,9 @@ from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark import Session
 
 # App Layout Configuration
-st.set_page_config(page_title="Pure Offline PDF Search", page_icon="📄", layout="centered")
+st.set_page_config(page_title="Advanced PDF RAG Search", page_icon="📄", layout="centered")
 
-st.title("📄 Pure Offline Document Search")
+st.title("📄 Advanced Document Search Engine")
 st.caption("Powered by Snowflake, Streamlit & GitHub (Zero External APIs)")
 st.markdown("---")
 
@@ -34,12 +34,10 @@ except Exception as context_error:
     st.error("❌ Failed to set Snowflake Database Context!")
     st.stop()
 
-# SIDEBAR: Fetch stats and unique files dynamically from the database table
+# SIDEBAR: Stats, Filters, and Advanced Relevance Controls
 with st.sidebar:
     st.header("📊 Database Statistics")
-    
     try:
-        # Fetch total rows (chunks) and distinct files in one quick query
         stats_df = session.sql("""
             SELECT 
                 COUNT(*) as total_chunks, 
@@ -47,33 +45,37 @@ with st.sidebar:
             FROM pdf_document_chunks;
         """).to_pandas()
         
-        # FIXED: Added the explicit indexing element parameters to avoid Pandas crashes
         total_chunks = int(stats_df["TOTAL_CHUNKS"].iloc[0])
         total_files = int(stats_df["TOTAL_FILES"].iloc[0])
         
-        # Display as clean interactive metric cards
         col_files, col_chunks = st.columns(2)
         col_files.metric("Total Files", f"📁 {total_files}")
         col_chunks.metric("Total Chunks", f"🧩 {total_chunks}")
-        
     except Exception:
         st.warning("⚠️ Could not read real-time table statistics from Snowflake.")
     
     st.markdown("---")
-    st.header("🔍 Document Filters")
+    st.header("🎛️ Search Adjustments")
     
+    # NEW: Relevance Threshold Slider to filter out junk matches
+    min_relevance = st.slider(
+        "Minimum Relevance Cutoff (%)", 
+        min_value=0, 
+        max_value=100, 
+        value=35,
+        help="Any document fragment scoring below this percentage will be automatically filtered out."
+    )
+    
+    st.markdown("---")
+    st.header("🔍 Document Filters")
     try:
-        # Pull distinct uploaded filenames currently in the chunk table
         distinct_files_df = session.sql("SELECT DISTINCT file_name FROM pdf_document_chunks ORDER BY file_name;").to_pandas()
         file_options = ["All Documents"] + distinct_files_df["FILE_NAME"].tolist()
     except Exception:
         file_options = ["All Documents"]
-        st.warning("Could not read uploaded document names from database.")
 
-    # Render the selector dropdown
     selected_file = st.selectbox("Select document to search within:", options=file_options)
     st.divider()
-    st.info("Filtering updates your SQL query to scan only the chunks belonging to your selection.")
 
 # User Input Box
 query_text = st.text_input("🔍 Enter your textbook search query:", placeholder="Type what you want to find inside your files...")
@@ -89,7 +91,7 @@ if query_text:
             if selected_file != "All Documents":
                 file_filter_clause = f"AND file_name = '{selected_file.replace("'", "''")}'"
 
-            # Hybrid Search query with contextual filtering injection
+            # Re-calibrated scoring logic designed to hit 100% on high-quality keyword intersections
             search_sql = f"""
                 WITH search_query AS (
                     SELECT CAST(local_python_embed('{safe_query}') AS VECTOR(FLOAT, 384)) AS q_vec
@@ -98,22 +100,30 @@ if query_text:
                     file_name,
                     chunk_id,
                     chunk_text,
-                    (VECTOR_COSINE_SIMILARITY(CAST(chunk_vector AS VECTOR(FLOAT, 384)), q.q_vec) * 0.7) + 
-                    (CASE WHEN LOWER(chunk_text) LIKE '%{safe_query.lower()}%' THEN 0.3 ELSE 0.0 END) AS similarity
+                    -- Boosted Equation: Normalizes vector math and awards a large bonus for keyword alignment
+                    (
+                        (VECTOR_COSINE_SIMILARITY(CAST(chunk_vector AS VECTOR(FLOAT, 384)), q.q_vec) + 1.0) / 2.0 * 0.4
+                    ) + 
+                    (
+                        CASE WHEN LOWER(chunk_text) LIKE '%{safe_query.lower()}%' THEN 0.6 ELSE 0.0 END
+                    ) AS similarity
                 FROM pdf_document_chunks, search_query q
                 WHERE 1=1 {file_filter_clause}
                 ORDER BY similarity DESC
-                LIMIT 3;
+                LIMIT 5;
             """
             
             # Execute query and convert to a Pandas DataFrame
-            results_df = session.sql(search_sql).to_pandas()
+            raw_results_df = session.sql(search_sql).to_pandas()
+            
+            # Filter the Pandas dataframe based on the slider state selection
+            results_df = raw_results_df[raw_results_df["SIMILARITY"] * 100 >= min_relevance]
             
             # Render the Results UI
             st.subheader("📚 Top Matching Document Segments")
             
             if results_df.empty:
-                st.warning(f"⚠️ No matches found. Make sure your database table contains data rows for '{selected_file}'.")
+                st.warning(f"⚠️ No matches met your {min_relevance}% relevance cutoff. Try lowering the sidebar slider or expanding your search query terms.")
             else:
                 for idx, row in results_df.iterrows():
                     with st.container():
@@ -122,6 +132,10 @@ if query_text:
                         
                         # Format the floating-point vector similarity match percentage
                         match_percentage = float(row['SIMILARITY']) * 100
+                        # Cap values at 100% for aesthetic UI uniformity
+                        if match_percentage > 100.0:
+                            match_percentage = 100.0
+                            
                         st.caption(f"🎯 Relevance Score: **{match_percentage:.2f}%**")
                         st.divider()
                         
