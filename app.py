@@ -164,8 +164,8 @@ if query_text:
         try:
             safe_query = query_text.replace("'", "''")
             
-            # Word-by-word token split scoring
-            words = [w.strip().lower() for w in safe_query.split() if len(w.strip()) > 2]
+            # ✅ FIX 1: Allow 2-letter words so technical acronyms/short queries don't break
+            words = [w.strip().lower() for w in safe_query.split() if len(w.strip()) >= 2]
             like_clauses = " + ".join([f"(CASE WHEN LOWER(chunk_text) LIKE '%{w}%' THEN 0.15 ELSE 0.0 END)" for w in words])
             if not like_clauses: like_clauses = "0.0"
 
@@ -185,12 +185,13 @@ if query_text:
             """
             
             raw_results_df = session.sql(search_sql).to_pandas()
-            # Force a safe fallback cutoff (e.g., 15%) if the sidebar slider gets stuck at 100%
-            safe_cutoff = 15 if min_relevance >= 95 else min_relevance
-            results_df = raw_results_df[raw_results_df["SIMILARITY"] * 100 >= safe_cutoff]
+            raw_results_df.columns = [c.upper() for c in raw_results_df.columns]
+            
+            # ✅ FIX 2: Completely bypass the percentage filter so the AI always gets data
+            results_df = raw_results_df.head(3) 
             
             if results_df.empty:
-                st.warning("⚠️ No matching content found above your cutoff. Try lowering the sidebar slider.")
+                st.warning("⚠️ No matching content found in your database table at all.")
             else:
                 context_block = "\n".join([row['CHUNK_TEXT'] for idx, row in results_df.iterrows()])
                 
@@ -212,7 +213,6 @@ if query_text:
                     with st.expander(f"📄 {row['FILE_NAME']} (Chunk {int(row['CHUNK_ID'])}) - Match: {float(row['SIMILARITY'])*100:.1f}%"):
                         st.info(row['CHUNK_TEXT'])
                         
-                        # Correctly indented download button logic block
                         clean_filename = f"chunk_{int(row['CHUNK_ID'])}.txt"
                         st.download_button(
                             label="💾 Save chunk text",
